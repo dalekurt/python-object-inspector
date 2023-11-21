@@ -1,1 +1,1 @@
-# Python Object Inspection
+# Python Object Inspector
