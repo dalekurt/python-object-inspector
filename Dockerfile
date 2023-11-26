@@ -8,16 +8,21 @@ ENV PYTHONUNBUFFERED 1
 # Install system dependencies, including libmagic
 RUN apk add --no-cache libmagic
 
+
+
 # Create and set the working directory inside the container
 WORKDIR /app
+
+# Create a non-root user
+RUN adduser -D inspector
+USER inspector
 
 # Copy the requirements file and install Python dependencies
 COPY src/requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
-
+RUN pip install pika
 # Copy your application code to the container
 COPY src /app/
 
-ENTRYPOINT [ "python" ]
-# Command to run your application
-CMD ["inspector.py"]
+CMD ["python", "main.py"]
+

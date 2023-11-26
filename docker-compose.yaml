@@ -10,6 +10,9 @@ x-minio-common: &minio-common
   environment:
     MINIO_ROOT_USER: minioadmin
     MINIO_ROOT_PASSWORD: minioadmin
+    MINIO_NOTIFY_AMQP_ENABLE: on
+    MINIO_NOTIFY_AMQP_URL: amqp://user:password@rabbitmq:5672
+    MINIO_NOTIFY_AMQP_EXCHANGE: minio_exchange
   healthcheck:
     test: ["CMD", "mc", "ready", "local"]
     interval: 5s
@@ -28,14 +31,16 @@ services:
     command: python main.py
     environment:
       - PYTHONUNBUFFERED=1
-      # - MINIO_ENDPOINT
-      # - MINIO_ACCESS_KEY
-      # - MINIO_SECRET_KEY
+      - MINIO_ENDPOINT=minio1:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+
     depends_on:
       - minio1
       - minio2
       - minio3
       - minio4
+      - rabbitmq
 
   minio1:
     <<: *minio-common
@@ -79,6 +84,20 @@ services:
       - minio3
       - minio4
 
+  rabbitmq:
+    image: "rabbitmq:3-management-alpine"
+    container_name: rabbitmq
+    ports:
+      - "5672:5672" # RabbitMQ default port
+      - "15672:15672" # RabbitMQ management UI
+    environment:
+      - RABBITMQ_DEFAULT_USER=user
+      - RABBITMQ_DEFAULT_PASS=password
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 ## By default this config uses default local driver,
 ## For custom volumes replace with volume driver configuration.
 volumes:
@@ -90,3 +109,7 @@ volumes:
   data3-2:
   data4-1:
   data4-2:
+
+networks:
+  backend:
+    driver: bridge
