@@ -12,7 +12,7 @@ x-minio-common: &minio-common
     MINIO_ROOT_PASSWORD: minioadmin
     MINIO_NOTIFY_AMQP_ENABLE: on
     MINIO_NOTIFY_AMQP_URL: amqp://user:password@rabbitmq:5672
-    MINIO_NOTIFY_AMQP_EXCHANGE: minio_exchange
+    MINIO_NOTIFY_AMQP_EXCHANGE: exchange-uploads
   healthcheck:
     test: ["CMD", "mc", "ready", "local"]
     interval: 5s
@@ -72,6 +72,7 @@ services:
 
   nginx:
     image: nginx:1.19.2-alpine
+    container_name: nginx
     hostname: nginx
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro

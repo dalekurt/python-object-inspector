@@ -1,3 +1,4 @@
+# src/publish_test_message.py
 import os
 import random
 import uuid
@@ -6,15 +7,13 @@ import pika
 
 # RabbitMQ connection parameters
 from rabbitmq_config import (
+    RABBITMQ_EXCHANGE_NAME,
     RABBITMQ_HOST,
     RABBITMQ_PASSWORD,
     RABBITMQ_PORT,
+    RABBITMQ_ROUTING_KEY,
     RABBITMQ_USER,
 )
-
-# RabbitMQ exchange and routing key
-EXCHANGE_NAME = "minio_exchange"
-ROUTING_KEY = ""
 
 # List of possible file extensions
 FILE_EXTENSIONS = [".jpeg", ".jpg", ".ogg", ".mp4", ".mp3", ".wav", ".txt", ".pdf"]
@@ -35,14 +34,19 @@ connection = pika.BlockingConnection(
 channel = connection.channel()
 
 # Declare the exchange
-channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type="fanout")
+channel.exchange_declare(exchange=RABBITMQ_EXCHANGE_NAME, exchange_type="fanout")
 
-# Publish the test message to the exchange
+# Get the queue name from the environment variable
+queue_name = os.environ.get("RABBITMQ_QUEUE_NAME", "uploads")
+
+# Publish the test message to the exchange with the specified routing key
 channel.basic_publish(
-    exchange=EXCHANGE_NAME, routing_key=ROUTING_KEY, body=random_file_name
+    exchange=RABBITMQ_EXCHANGE_NAME,
+    routing_key=RABBITMQ_ROUTING_KEY,
+    body=random_file_name,
 )
 
 # Close the connection
 connection.close()
 
-print(f"Test message '{random_file_name}' published to RabbitMQ.")
+print(f"Test message '{random_file_name}' published to RabbitMQ queue '{queue_name}'.")

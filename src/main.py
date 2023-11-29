@@ -1,4 +1,4 @@
-# main.py
+# src/main.py
 """
 Main script for checking the existence of a specified Minio object in the 'uploads' bucket.
 """
@@ -12,11 +12,20 @@ from loguru import logger
 
 from inspect_object import InspectObject
 from rabbitmq_config import (
+    RABBITMQ_EXCHANGE_NAME,
     RABBITMQ_HOST,
     RABBITMQ_PASSWORD,
     RABBITMQ_PORT,
+    RABBITMQ_QUEUE_NAME,
     RABBITMQ_USER,
 )
+
+# TODO: Constants for the logger
+LOG_FILE = "logs/app.log"
+LOG_ROTATION = "5 MB"
+LOG_LEVEL = "INFO"
+LOG_FORMAT = "{time} - {level} - {message}"
+RETRY_INTERVAL = 5
 
 
 def handle_interrupt(signum, frame):
@@ -26,10 +35,10 @@ def handle_interrupt(signum, frame):
 
 signal.signal(signal.SIGINT, handle_interrupt)
 
-# Configure logging
-logger.add(
-    "app.log", rotation="5 MB", level="INFO", format="{time} - {level} - {message}"
-)
+
+# Logging
+def setup_logging():
+    logger.add(LOG_FILE, rotation=LOG_ROTATION, level=LOG_LEVEL, format=LOG_FORMAT)
 
 
 def callback(ch, method, properties, body):
@@ -56,9 +65,14 @@ def inspect_uploaded_object(filename: str):
         logger.error(f"Error inspecting object '{filename}': {e}")
 
 
+# Max retries for the retry logic
+MAX_RETRIES = 3
+
+
 def connect_to_rabbitmq():
     connection = None
-    while True:
+    retries = 0
+    while retries < MAX_RETRIES:
         try:
             connection = pika.BlockingConnection(
                 pika.ConnectionParameters(
@@ -70,8 +84,13 @@ def connect_to_rabbitmq():
             return connection
         except pika.exceptions.AMQPConnectionError as e:
             logger.warning(f"Error connecting to RabbitMQ: {e}")
-            logger.info("Retrying in 5 seconds...")
-            time.sleep(5)
+            logger.info(f"Retrying in {RETRY_INTERVAL} seconds...")
+            time.sleep(RETRY_INTERVAL)
+            retries += 1
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+    logger.error("Max retries reached. Unable to connect to RabbitMQ.")
+    sys.exit(1)
 
 
 def listen_for_rabbitmq_events():
@@ -82,22 +101,37 @@ def listen_for_rabbitmq_events():
         try:
             connection = connect_to_rabbitmq()
             channel = connection.channel()
-            channel.exchange_declare(exchange="minio_exchange", exchange_type="fanout")
-            result = channel.queue_declare(queue="", exclusive=True)
+            channel.exchange_declare(
+                exchange=RABBITMQ_EXCHANGE_NAME, exchange_type="fanout"
+            )
+            result = channel.queue_declare(queue=RABBITMQ_QUEUE_NAME, exclusive=True)
             queue_name = result.method.queue
-            channel.queue_bind(exchange="minio_exchange", queue=queue_name)
+            channel.queue_bind(
+                exchange=RABBITMQ_EXCHANGE_NAME, queue=result.method.queue
+            )
             channel.basic_consume(queue=queue_name, on_message_callback=callback)
             logger.info(
-                "Connected to RabbitMQ. Waiting for events. To exit press Ctrl+C"
+                f"Connected to RabbitMQ. Waiting for events on {RABBITMQ_QUEUE_NAME} queue. To exit press Ctrl+C"
             )
             channel.start_consuming()
         except Exception as e:
             logger.error(f"Error setting up RabbitMQ consumer: {e}")
         finally:
+            # Close the channel if it is open
+            if channel is not None and channel.is_open:
+                channel.close()
+
             # Close the connection if it is open
             if connection is not None and connection.is_open:
                 connection.close()
 
 
+def handle_interrupt(signum, frame):
+    logger.info("Received interrupt signal. Shutting down gracefully.")
+    sys.exit(0)
+
+
 if __name__ == "__main__":
+    setup_logging()
+    logger.info("Started successfully.")
     listen_for_rabbitmq_events()
