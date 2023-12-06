@@ -1,16 +1,13 @@
-# src/main.py
-"""
-Main script for checking the existence of a specified Minio object in the 'uploads' bucket.
-"""
-
 import signal
 import sys
 import time
 
 import pika
 from loguru import logger
+from opentelemetry import trace
 
 from inspect_object import InspectObject
+from opentelemetry_config import configure_opentelemetry
 from rabbitmq_config import (
     RABBITMQ_EXCHANGE_NAME,
     RABBITMQ_HOST,
@@ -20,13 +17,6 @@ from rabbitmq_config import (
     RABBITMQ_USER,
 )
 
-# TODO: Constants for the logger
-LOG_FILE = "logs/app.log"
-LOG_ROTATION = "5 MB"
-LOG_LEVEL = "INFO"
-LOG_FORMAT = "{time} - {level} - {message}"
-RETRY_INTERVAL = 5
-
 
 def handle_interrupt(signum, frame):
     logger.info("Received interrupt signal. Shutting down gracefully.")
@@ -35,10 +25,8 @@ def handle_interrupt(signum, frame):
 
 signal.signal(signal.SIGINT, handle_interrupt)
 
-
-# Logging
-def setup_logging():
-    logger.add(LOG_FILE, rotation=LOG_ROTATION, level=LOG_LEVEL, format=LOG_FORMAT)
+# Configure OpenTelemetry
+configure_opentelemetry()
 
 
 def callback(ch, method, properties, body):
@@ -47,22 +35,36 @@ def callback(ch, method, properties, body):
         logger.info(f"Received event from RabbitMQ: {filename}")
         inspect_uploaded_object(filename)
     except Exception as e:
-        logger.error(f"Error processing RabbitMQ message: {e}")
+        logger.error(f"Error processing RabbitMQ message: {e}", exc_info=True)
+        # Increment failed inspections counter
+        failed_inspections_counter.add(1)
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
 
 def inspect_uploaded_object(filename: str):
     try:
-        inspect_object = InspectObject(filename)
-        result = inspect_object.inspect()
-        if result["content"] is not None:
-            logger.info(
-                f"Object inspection for '{filename}' completed successfully. Result: {result}"
-            )
-        else:
-            logger.warning(f"Object '{filename}' not found in 'uploads' bucket.")
+        with trace.get_tracer(__name__).start_as_current_span(
+            "inspect_uploaded_object"
+        ):
+            # Increment objects inspected counter
+            objects_inspected_counter.add(1)
+
+            inspect_object = InspectObject(filename)
+            result = inspect_object.inspect()
+            if result["content"] is not None:
+                logger.info(
+                    f"Object inspection for '{filename}' completed successfully. Result: {result}"
+                )
+                # Increment successful inspections counter
+                successful_inspections_counter.add(1)
+            else:
+                logger.warning(f"Object '{filename}' not found in 'uploads' bucket.")
+                # Increment failed inspections counter
+                failed_inspections_counter.add(1)
     except Exception as e:
-        logger.error(f"Error inspecting object '{filename}': {e}")
+        logger.error(f"Error inspecting object '{filename}': {e}", exc_info=True)
+        # Increment failed inspections counter
+        failed_inspections_counter.add(1)
 
 
 # Max retries for the retry logic
@@ -81,14 +83,22 @@ def connect_to_rabbitmq():
                     credentials=pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD),
                 )
             )
+            # Set RabbitMQ connection status metric to 1 (success)
+            rabbitmq_connection_status.record(1)
             return connection
         except pika.exceptions.AMQPConnectionError as e:
-            logger.warning(f"Error connecting to RabbitMQ: {e}")
+            logger.error(f"Error connecting to RabbitMQ: {e}", exc_info=True)
             logger.info(f"Retrying in {RETRY_INTERVAL} seconds...")
             time.sleep(RETRY_INTERVAL)
             retries += 1
+            # Increment retry attempts counter
+            retry_attempts_counter.add(1)
         except Exception as e:
-            logger.error(f"Unexpected error: {e}")
+            logger.error(f"Unexpected error: {e}", exc_info=True)
+            # Set RabbitMQ connection status metric to 0 (failure)
+            rabbitmq_connection_status.record(0)
+    # Set RabbitMQ connection status metric to 0 (failure) when max retries are reached
+    rabbitmq_connection_status.record(0)
     logger.error("Max retries reached. Unable to connect to RabbitMQ.")
     sys.exit(1)
 
@@ -115,7 +125,7 @@ def listen_for_rabbitmq_events():
             )
             channel.start_consuming()
         except Exception as e:
-            logger.error(f"Error setting up RabbitMQ consumer: {e}")
+            logger.error(f"Error setting up RabbitMQ consumer: {e}", exc_info=True)
         finally:
             # Close the channel if it is open
             if channel is not None and channel.is_open:
@@ -126,12 +136,14 @@ def listen_for_rabbitmq_events():
                 connection.close()
 
 
-def handle_interrupt(signum, frame):
-    logger.info("Received interrupt signal. Shutting down gracefully.")
-    sys.exit(0)
-
-
 if __name__ == "__main__":
-    setup_logging()
+    # setup_logging()
+    configure_opentelemetry()
     logger.info("Started successfully.")
-    listen_for_rabbitmq_events()
+    script_start_time = time.time()
+    try:
+        listen_for_rabbitmq_events()
+    finally:
+        # Calculate script uptime and record the value
+        script_uptime = time.time() - script_start_time
+        script_uptime_counter.add(int(script_uptime))
